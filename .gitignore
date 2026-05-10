@@ -1,0 +1,43 @@
+# Datasets, audio, model weights, caches, outputs — never committed.
+downloaded_audios/
+data/
+*.wav
+*.mp3
+*.flac
+*.csv
+!unique_disfluencies_sample.csv
+*.pkl
+*.pt
+*.bin
+*.safetensors
+checkpoints/
+outputs/
+submission.csv
+asr_cache.pkl
+asr_cache/
+.cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,312 +1,200 @@
-# 🎙️ Hindi Disfluency Restoration Pipeline
+# Hindi Disfluency Restoration
 
-> Automatically restore filler words (disfluencies) to clean Hindi transcripts using speech recognition and language modeling.
+Restore filler words (`हम्म`, `हाँ`, `उम्म`, `तो`, …) to *clean* Hindi transcripts using a Hindi-tuned Whisper-Large-V3 ASR model, sequence alignment, a position prior, and a trigram language model.
 
----
-
-## 📋 Table of Contents
-
-1. [Problem Statement](#problem-statement)
-2. [Pipeline Overview](#pipeline-overview)
-3. [Input & Output](#input--output)
-4. [Models Used](#models-used)
-5. [Core Logic](#core-logic)
-6. [Evaluation Metric](#evaluation-metric)
-7. [File Structure](#file-structure)
-8. [How to Run](#how-to-run)
+This repository is the **source-only**, refactored version of the original Kaggle competition notebook. The pipeline is now a small Python package (`disfluency/`) with unit tests and a CLI; the original notebook is kept as the explanatory walkthrough.
 
 ---
 
-## Problem Statement
+## What it does
 
-When people speak naturally, they use **filler words** like:
-- English: "um", "uh", "like", "you know"
-- Hindi: "हम्म" (hmm), "हां" (yeah), "उम्म" (umm), "तो" (so), "मतलब" (I mean)
+Given:
+- a clean Hindi transcript with all filler words removed, and
+- the original audio,
 
-These are called **disfluencies**. In many transcription datasets, these fillers are removed to create "clean" text. But for natural-sounding speech synthesis or analysis, we need them back!
+produce the transcript with the spoken fillers restored. Evaluated by Word Error Rate (WER).
 
-**Task**: Given a clean Hindi transcript and its corresponding audio, restore the disfluencies that were originally spoken.
+## Workflow
+
+```
+clean text ──┐
+              │     ┌──────────────────┐
+   audio ───► │ ──► │ Whisper ASR      │ ──► tokens + per-word log-probs
+              │     └──────────────────┘
+              │              │
+              ▼              ▼
+       SequenceMatcher ── insert ops ──► filter (per-token threshold,
+                                                position prior, trigram LM)
+                                                       │
+                                                       ▼
+                                         apply right-to-left ──► restored text
+```
+
+| Module | Responsibility |
+|--------|----------------|
+| `disfluency.text` | Tokenization, normalization, Devanagari-safe filler stripping |
+| `disfluency.thresholds` | Per-token Whisper log-prob thresholds |
+| `disfluency.position` | Position prior (start-of-sentence bias) |
+| `disfluency.ngram` | Trigram LM with add-α smoothing |
+| `disfluency.align` | `SequenceMatcher` + decision logic |
+| `disfluency.asr` | Whisper wrapper (uses `compute_transition_scores`) |
+| `disfluency.cache` | Per-id JSON cache for ASR results |
+| `disfluency.pipeline` | Orchestrator: `Restorer.restore()` |
+| `disfluency.cli` | `disfluency-restore` entry point |
 
 ---
 
-## Pipeline Overview
+## Expected input format
 
-```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   Clean Text    │     │   Audio File     │     │  Disfluency     │
-│   (no fillers)  │     │   (.wav)         │     │  List           │
-└────────┬────────┘     └────────┬─────────┘     └────────┬────────┘
-         │                       │                        │
-         │                       ▼                        │
-         │              ┌────────────────┐                │
-         │              │  Whisper ASR   │                │
-         │              │  (Hindi model) │                │
-         │              └────────┬───────┘                │
-         │                       │                        │
-         │                       ▼                        │
-         │              ┌────────────────┐                │
-         │              │ ASR Output +   │                │
-         │              │ Confidence     │                │
-         │              └────────┬───────┘                │
-         │                       │                        │
-         ▼                       ▼                        ▼
-    ┌────────────────────────────────────────────────────────┐
-    │              Sequence Alignment (SequenceMatcher)       │
-    │   Compare clean text with ASR output to find INSERT ops │
-    └────────────────────────────┬───────────────────────────┘
-                                 │
-                                 ▼
-    ┌────────────────────────────────────────────────────────┐
-    │                    Filtering Logic                      │
-    │  1. Is it a known disfluency?                          │
-    │  2. Does ASR confidence exceed threshold?               │
-    │  3. Does position prior favor this location?            │
-    │  4. Does language model approve?                        │
-    └────────────────────────────┬───────────────────────────┘
-                                 │
-                                 ▼
-    ┌────────────────────────────────────────────────────────┐
-    │              Apply Insertions to Clean Text             │
-    └────────────────────────────┬───────────────────────────┘
-                                 │
-                                 ▼
-                      ┌──────────────────┐
-                      │  Restored Text   │
-                      │  (with fillers)  │
-                      └──────────────────┘
-```
+The pipeline expects three artifacts that are **not committed to this repo** (see *Intentionally not included* below):
+
+1. **`test.csv`** — header `id,transcript`. `transcript` is the clean Hindi text.
+2. **`train.csv`** *(optional, recommended)* — header `id,transcript`. Used only to fit the trigram LM. Without it, the LM filter is disabled.
+3. **`downloaded_audios/`** — one `{id}.wav` per row in `test.csv`, mono, any sample rate (resampled to 16 kHz internally).
+
+Output is written to `outputs/submission.csv` (header `id,transcript`).
 
 ---
 
-## Input & Output
+## Intentionally not included
 
-### Input
+To keep the repo lightweight, the following are **never committed** (see `.gitignore`):
 
-| File | Description |
-|------|-------------|
-| `test.csv` | Contains `id` and `transcript` (clean text without disfluencies) |
-| `downloaded_audios/` | Audio files named `{id}.wav` |
-| `unique_disfluencies.csv` | List of known Hindi disfluency words |
-
-**Example Input Row:**
-```
-id: audio_001
-transcript: "मैं सोचता हूं कि यह अच्छा है"
-```
-
-### Output
-
-| File | Description |
-|------|-------------|
-| `submission.csv` | Contains `id` and `transcript` (restored text with disfluencies) |
-
-**Example Output Row:**
-```
-id: audio_001
-transcript: "हम्म मैं सोचता हूं कि यह अच्छा है"  ← "हम्म" restored!
-```
+- The Kaggle dataset (audio `.wav`, `train.csv`, `test.csv`, `unique_disfluencies.csv`).
+- Whisper model weights (downloaded at runtime from Hugging Face).
+- The ASR cache (`outputs/asr_cache/`) and any `submission.csv`.
+- Virtualenvs, IDE metadata, `__pycache__`, build artifacts.
 
 ---
 
-## Models Used
+## Install
 
-### 1. Whisper Large V3 (Hindi Fine-tuned)
-
-**What:** Automatic Speech Recognition (ASR) model by OpenAI, fine-tuned on Hindi data by ARTPARK-IISc.
-
-**Why:** 
-- State-of-the-art accuracy on Hindi speech
-- Captures spoken disfluencies in its output
-- Provides per-token confidence scores (log probabilities)
-
-**How it's used:**
-```python
-# Load model
-model = WhisperForConditionalGeneration.from_pretrained(
-    "ARTPARK-IISc/whisper-large-v3-vaani-hindi"
-)
-
-# Transcribe audio with confidence scores
-output = model.generate(
-    audio_features,
-    output_scores=True,  # Get confidence for each token
-    return_dict_in_generate=True
-)
-```
-
-**Model ID:** `ARTPARK-IISc/whisper-large-v3-vaani-hindi`
-
----
-
-### 2. N-Gram Language Model (Trigram)
-
-**What:** A simple statistical model that predicts word probability based on previous 2 words.
-
-**Why:**
-- Fast and lightweight
-- Filters out insertions that create unnatural sentences
-- Built from training transcripts (domain-specific)
-
-**How it's used:**
-```python
-# Check if inserting "हम्म" sounds natural
-sentence_before = "मैं सोचता हूं"           # P(sentence) = X
-sentence_after = "हम्म मैं सोचता हूं"       # P(sentence) = Y
-
-if Y - X > threshold:  # If probability doesn't drop too much
-    insert_disfluency()
-```
-
----
-
-## Core Logic
-
-### Step 1: Sequence Alignment
-
-We use Python's `SequenceMatcher` to find differences between clean text and ASR output:
-
-```python
-clean_tokens = ["मैं", "सोचता", "हूं"]
-asr_tokens   = ["हम्म", "मैं", "सोचता", "हूं"]
-
-# SequenceMatcher finds:
-# - INSERT "हम्म" at position 0
-```
-
-### Step 2: Per-Disfluency Thresholds
-
-Each disfluency has its own confidence threshold:
-
-| Disfluency | Threshold | Reason |
-|------------|-----------|--------|
-| हम्म (hmm) | -8.0 | Almost always a filler, be lenient |
-| उम्म (umm) | -7.0 | Almost always a filler |
-| हां (yes) | -5.0 | Could be real word, be stricter |
-| तो (so) | -4.0 | Often real conjunction |
-| और (and) | -3.0 | Almost always real word, very strict |
-
-**Logic:**
-```python
-asr_confidence = -3.5  # From Whisper
-threshold = -5.0       # For "हां"
-
-if asr_confidence > threshold:  # -3.5 > -5.0 ✓
-    insert_disfluency()
-```
-
-### Step 3: Position Prior
-
-Disfluencies usually occur at the **start** of sentences (when speaker is thinking).
-
-```python
-def position_prior(position, total_words):
-    # Returns score 0-1
-    # Position 0 (start) → 1.0 (high)
-    # Position N (end) → 0.0 (low)
-    return 1.0 - (position / total_words) ** 1.5
-```
-
-The final score combines ASR confidence and position:
-```python
-final_score = asr_logprob + log(position_prior)
-```
-
-### Step 4: Language Model Check
-
-Before inserting, verify the sentence still sounds natural:
-
-```python
-if check_insertion_plausibility(clean_tokens, position, "हम्म"):
-    insert_disfluency()
-```
-
----
-
-## Evaluation Metric
-
-### Word Error Rate (WER)
-
-WER measures how different the predicted transcript is from the reference:
-
-```
-WER = (Substitutions + Deletions + Insertions) / Total Reference Words
-```
-
-**Example:**
-```
-Reference:  "हम्म मैं सोचता हूं"  (4 words)
-Prediction: "मैं सोचता हूं"      (3 words)
-
-Deletions = 1 ("हम्म" missing)
-WER = 1/4 = 0.25 = 25%
-```
-
-**Lower WER = Better!**
-
-The competition ranks submissions by WER on the test set.
-
----
-
-## File Structure
-
-```
-Auto Disfluency Restoration/
-├── submission.ipynb        # Main pipeline notebook
-├── README.md               # This file
-├── baseline.py             # Standalone Python version
-├── disfluency_model_based.py  # Experimental version with calibration
-└── downloaded_audios/      # Audio files (on Kaggle)
-    ├── audio_001.wav
-    ├── audio_002.wav
-    └── ...
-```
-
----
-
-## How to Run
-
-### On Kaggle
-
-1. Create a new notebook
-2. Add the competition dataset as input
-3. Copy cells from `submission.ipynb`
-4. Run all cells
-5. Submit `submission.csv`
-
-### Locally (for testing)
+Requires Python ≥ 3.10. A GPU is strongly recommended for ASR; CPU works but is ~30× slower.
 
 ```bash
-# Install dependencies
-pip install transformers torch librosa jiwer pandas numpy
+git clone https://github.com/adhithyasash1/audio-disfluency-restoration.git
+cd audio-disfluency-restoration
 
-# Update paths in notebook to local directories
-AUDIO_DIR = "./downloaded_audios"
-TEST_CSV = "./test.csv"
-# etc.
-
-# Run notebook
-jupyter notebook submission.ipynb
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[asr,dev]"        # full pipeline + tests
+# or, to skip the heavy ASR stack and only use the pure-Python helpers:
+pip install -e .
 ```
 
 ---
 
-## Key Parameters
+## Run
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `pos_exponent` | 1.5 | Higher = stronger bias toward sentence start |
-| `use_lm` | True | Whether to use language model filtering |
-| `lm_threshold` | -2.0 | More negative = more lenient insertions |
-| `max_consecutive` | 4 | Limit repeated same tokens |
+### Inference (CLI)
+
+```bash
+disfluency-restore \
+  --audio-dir /path/to/downloaded_audios \
+  --test-csv  /path/to/test.csv \
+  --train-csv /path/to/train.csv \
+  --out       outputs/submission.csv \
+  --cache-dir outputs/asr_cache
+```
+
+Useful flags: `--no-lm`, `--pos-exponent 1.5`, `--lm-threshold -2.0`, `--model <hf-id>`, `--seed 0`.
+
+### Inference (Python)
+
+```python
+from disfluency.asr import WhisperASR
+from disfluency.cache import AsrCache
+from disfluency.ngram import NgramLM
+from disfluency.pipeline import RestorationConfig, Restorer
+import pandas as pd
+
+train = pd.read_csv("train.csv")["transcript"].dropna().astype(str).tolist()
+restorer = Restorer(
+    asr=WhisperASR(),
+    lm=NgramLM.from_transcripts(train),
+    cache=AsrCache("outputs/asr_cache"),
+    config=RestorationConfig(pos_exponent=1.5, use_lm=True, lm_threshold=-2.0),
+)
+print(restorer.restore("मैं ठीक हूं", audio_id="ex1", audio_path="ex1.wav"))
+```
+
+### Notebook walkthrough
+
+[`submission.ipynb`](submission.ipynb) is the original Kaggle end-to-end notebook, kept as a self-contained explanation of the algorithm. The code in `disfluency/` is the production-quality re-implementation with bug fixes.
+
+### Training
+
+There is **no model training step** in this project — Whisper is used zero-shot via the public ARTPARK-IISc fine-tune; the only "training" is fitting the trigram LM from `train.csv`, which happens automatically when you pass `--train-csv`.
+
+### Evaluate
+
+If you have a held-out CSV with both clean and gold-restored columns:
+
+```python
+from jiwer import wer
+print(wer(gold_list, predicted_list))
+```
+
+A held-out 90/10 split + ablation script is on the roadmap.
 
 ---
 
-## Summary
+## Outputs
 
-1. **Input**: Clean transcript + Audio
-2. **ASR**: Whisper transcribes audio (captures disfluencies)
-3. **Align**: Compare clean vs ASR to find insertions
-4. **Filter**: Keep only confident, natural-sounding insertions
-5. **Output**: Restored transcript with disfluencies
+| Path | Contents |
+|------|----------|
+| `outputs/submission.csv` | `id,transcript` with restored fillers |
+| `outputs/asr_cache/{id}.json` | Cached ASR text + per-word log-probs |
 
-The pipeline balances **precision** (don't insert wrong words) with **recall** (don't miss real disfluencies) using confidence thresholds, position priors, and language model validation.
+Re-running with the cache populated skips Whisper entirely.
+
+---
+
+## Tests
+
+```bash
+pytest -q
+```
+
+Covers the pure-Python pieces (text/regex/alignment/position/n-gram). The ASR layer is not exercised in CI because it requires GPU + 3 GB of model weights.
+
+---
+
+## Troubleshooting
+
+- **`No module named 'transformers'`** — install the ASR extra: `pip install -e ".[asr]"`.
+- **Whisper download is slow** — `huggingface-cli download ARTPARK-IISc/whisper-large-v3-vaani-hindi` once, or pass `--model` to a locally-cached path.
+- **CUDA OOM** — pass `--model openai/whisper-medium` or run on CPU; FP16 is auto-enabled on CUDA only.
+- **Empty `submission.csv` rows** — audio paths don't resolve. Check that `{audio-dir}/{id}.wav` exists for every row in `test.csv`.
+- **"forced_decoder_ids deprecated"** — upgrade transformers to ≥ 4.44.
+
+---
+
+## What was modernized vs. the original notebook
+
+| # | Bug | Fix |
+|---|-----|-----|
+| 1 | `\b…\b` regex never matched Devanagari, so `make_clean` was a silent no-op | Lookarounds against whitespace/punctuation in `disfluency/text.py` |
+| 2 | Per-word Whisper log-probs were misaligned by `prompt_len − 1` tokens | `model.compute_transition_scores` in `disfluency/asr.py` |
+| 3 | Deprecated `forced_decoder_ids=` path on `generate()` | Modern `language="hi", task="transcribe"` kwargs |
+| 4 | Global `torch.set_grad_enabled(False)` leaked state | `with torch.inference_mode():` scoped |
+| 5 | `apply_insertions` ordering was unstable for same-position duplicates | Stable sort using enumerated original index |
+| 6 | Single pickle ASR cache (whole-run failure if corrupted) | Per-id JSON shards in `disfluency/cache.py` |
+| 7 | Notebook globals → not unit-testable | `disfluency/` package + 18 pytest cases |
+| 8 | Hard-coded `/kaggle/input/...` paths | Required CLI flags |
+| 9 | No deps file, no seed pinning | `pyproject.toml` + `--seed` flag |
+
+---
+
+## Roadmap
+
+- [ ] Local 90/10 eval + ablation script
+- [ ] Replace trigram LM with IndicBERTv2 masked-LM scoring
+- [ ] HF chunked ASR pipeline with stride to fix boundary-word loss
+- [ ] Learned classifier over `(logprob, position, mlm_score, neighbors)` instead of hand-tuned thresholds
+- [ ] GitHub Actions: lint + tests on every push
+
+---
+
+## License
+
+MIT.

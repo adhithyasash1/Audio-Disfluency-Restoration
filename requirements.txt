@@ -1,0 +1,9 @@
+# Convenience pin file. Prefer `pip install -e .[asr]` from pyproject.toml.
+numpy>=1.24,<2.1
+pandas>=2.0
+tqdm>=4.66
+jiwer>=3.0
+torch>=2.2,<3.0
+transformers>=4.44,<5.0
+librosa>=0.10
+soundfile>=0.12

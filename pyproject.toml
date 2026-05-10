@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "disfluency"
+version = "0.2.0"
+description = "Hindi disfluency restoration pipeline using Whisper ASR + n-gram LM."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Adhithya Sashidharan" }]
+keywords = ["asr", "whisper", "hindi", "disfluency", "speech"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "numpy>=1.24,<2.1",
+    "pandas>=2.0",
+    "tqdm>=4.66",
+    "jiwer>=3.0",
+]
+
+[project.optional-dependencies]
+asr = [
+    "torch>=2.2,<3.0",
+    "transformers>=4.44,<5.0",
+    "librosa>=0.10",
+    "soundfile>=0.12",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+disfluency-restore = "disfluency.cli:main"
+
+[project.urls]
+Repository = "https://github.com/adhithyasash1/audio-disfluency-restoration"
+
+[tool.setuptools.packages.find]
+include = ["disfluency*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
