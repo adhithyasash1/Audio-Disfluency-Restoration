@@ -159,16 +159,6 @@ Covers the pure-Python pieces (text/regex/alignment/position/n-gram). The ASR la
 
 ---
 
-## Troubleshooting
-
-- **`No module named 'transformers'`** — install the ASR extra: `pip install -e ".[asr]"`.
-- **Whisper download is slow** — `huggingface-cli download ARTPARK-IISc/whisper-large-v3-vaani-hindi` once, or pass `--model` to a locally-cached path.
-- **CUDA OOM** — pass `--model openai/whisper-medium` or run on CPU; FP16 is auto-enabled on CUDA only.
-- **Empty `submission.csv` rows** — audio paths don't resolve. Check that `{audio-dir}/{id}.wav` exists for every row in `test.csv`.
-- **"forced_decoder_ids deprecated"** — upgrade transformers to ≥ 4.44.
-
----
-
 ## Roadmap
 
 - [ ] Local 90/10 eval + ablation script
