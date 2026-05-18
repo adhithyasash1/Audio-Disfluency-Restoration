@@ -1,6 +1,6 @@
-# Hindi Disfluency Restoration
+# Indic Disfluency Restoration
 
-Restore filler words (`हम्म`, `हाँ`, `उम्म`, `तो`, …) to *clean* Hindi transcripts using a Hindi-tuned Whisper-Large-V3 ASR model, sequence alignment, a position prior, and a trigram language model.
+Restore filler words (`हम्म`, `हाँ`, `उम्म`, `तो`, …) to *clean* Multilingual transcripts using a tuned Whisper-Large-V3 ASR model, sequence alignment, a position prior, and a trigram language model.
 
 This repository is the **source-only**, refactored version of the original Kaggle competition notebook. The pipeline is now a small Python package (`disfluency/`) with unit tests and a CLI; the original notebook is kept as the explanatory walkthrough.
 
@@ -123,7 +123,7 @@ print(restorer.restore("मैं ठीक हूं", audio_id="ex1", audio_pa
 
 ### Training
 
-There is **no model training step** in this project — Whisper is used zero-shot via the public ARTPARK-IISc fine-tune; the only "training" is fitting the trigram LM from `train.csv`, which happens automatically when you pass `--train-csv`.
+There is **no model training step** in this project — Whisper is used zero-shot via the public ARTPARK-IISc fine-tuned whisper model; the only "training" is fitting the trigram LM from `train.csv`, which happens automatically when you pass `--train-csv`.
 
 ### Evaluate
 
